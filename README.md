@@ -1,1 +1,1 @@
-# HOL-light-script
+# H-script
