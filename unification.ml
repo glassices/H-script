@@ -71,8 +71,10 @@ let rec mk_lcomb (f : term) (args : term list) : term =
     h::t -> mk_lcomb (mk_comb (f,h)) t
   | [] -> f;;
 
+let (beta_eta_conv : conv) = (TOP_DEPTH_CONV BETA_CONV) THENC (TOP_DEPTH_CONV ETA_CONV);;
+
 (* DONE CHECKING *)
-let beta_eta_norm = rand o concl o ((TOP_DEPTH_CONV BETA_CONV) THENC (TOP_DEPTH_CONV ETA_CONV));;
+let (beta_eta_term : term -> term) = rand o concl o beta_eta_conv;;
 
 (* DONE CHECKING *)
 let safe_tyins i theta =
@@ -82,7 +84,7 @@ let safe_tyins i theta =
  * Only variables start with x are regarded as original free variables
  *)
 let safe_tmins i theta =
-  let theta = map (fun (a,b) -> beta_eta_norm (vsubst [i] a),b) theta in
+  let theta = map (fun (a,b) -> beta_eta_term (vsubst [i] a),b) theta in
   if String.get (fst (dest_var (snd i))) 0 = 'x' then i::theta else theta;;
 
 (* DONE CHECKING *)
@@ -213,11 +215,13 @@ let (hol_unify : (term * term) list -> unifier) =
     (* check maximum depth *)
     if dep >= 5 then sofar else
     (* step 0: beta-eta normalization and kill extra bvars *)
-    let obj = pmap beta_eta_norm obj in
+    let obj = pmap beta_eta_term obj in
     let obj = map bound_eta_norm obj in
     (* step D: remove all identical pairs *)
+    (*
     List.iter (fun (u,v) -> Printf.printf "1\t%s\t%s\n" (string_of_term u) (string_of_term v)) obj;
     Printf.printf "\n";
+    *)
     let obj = filter (fun (u,v) -> alphaorder u v <> 0) obj in
     (* step O: swap all bound-free pairs *)
     let obj = map (fun (u,v) -> if is_var v || not (head_free u) && head_free v then (v,u)
@@ -266,7 +270,11 @@ let (hol_unify : (term * term) list -> unifier) =
                                             let _,(_,argu) = decompose u in
                                             if length argu = 0 then v,u else u,v in
             let bv1,(hs1,args1) = decompose tm1 and bv2,(hs2,args2) = decompose tm2 in
-            (* step I: imitation *)
+            (* step I: imitation
+             * Imitation will not consider to increase the depth of searching
+             * Or the unification algorihtm cant even solve problem like
+             * [`f 1234`, `1234 + 1234`]
+             *)
             let sofar =
               if is_const hs2 then
                 let tyl1,apx1 = dest_fun (type_of hs1) and tyl2,apx2 = dest_fun (type_of hs2) in
@@ -274,7 +282,7 @@ let (hol_unify : (term * term) list -> unifier) =
                 let args = map (fun ty -> mk_lcomb (mk_var (new_var(),mk_fun (tyl1,ty))) bvars) tyl2 in
                 let tm = mk_term bvars (mk_lcomb hs2 args) in
                 let tmins' = safe_tmins (tm,hs1) tmins in
-                work (dep+1) (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
+                work dep (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
               else sofar in
             (* step T_P and P: projection *)
             let tyl1,apx1 = dest_fun (type_of hs1) in
@@ -301,3 +309,65 @@ let (hol_unify : (term * term) list -> unifier) =
                 with Failure _ -> failwith "hol_unify: Type unification failed" in
     let obj = pmap (inst tyins) obj in
     tre,work 0 obj (tyins,[]) [];;
+
+(*
+ * normalize the name of freevars and typevars in a theorem
+ * all freevars will be renamed to be vpre{#n}
+ * all tyvars will be renamed to be tpre{#n}
+ *)
+let normalize_name thm vpre tpre =
+  let asl,c = dest_thm thm in
+  let fv = freesl (c::asl) and tv = itlist (union o type_vars_in_term) (c::asl) [] in
+  (* rename vars first then tyvars, since renaming tyvars will make vars unmatched *)
+  let tmins = List.mapi (fun i var -> (mk_var (vpre ^ (string_of_int (i+1)),type_of var),var)) fv in
+  let tyins = List.mapi (fun i ty -> (mk_vartype (tpre ^ (string_of_int (i+1))),ty)) tv in
+  INST_TYPE tyins (INST tmins thm);;
+
+(* Only conv the concl of a theorem *)
+let conv_concl (cnv : conv) (th : thm) : thm =
+  EQ_MP (cnv (concl th)) th;;
+
+(* Conv assumptions and the conclusion of a theorem *)
+let conv_thm (cnv : conv) (th : thm) : thm =
+  let asl,c = dest_thm th in
+  let work a th =
+    let eth = cnv a in
+    let gth = EQ_MP (SYM eth) (ASSUME (rand (concl eth))) in
+    EQ_MP (DEDUCT_ANTISYM_RULE gth th) gth in
+  conv_concl cnv (itlist work asl th);;
+
+let substantiate (pre,(tyins,tmins)) th =
+  INST tmins (INST_TYPE tyins (INST pre th));;
+
+(*
+ * Generalized EQ_MP inference rule
+ *)
+let (gen_eq_mp : thm -> thm -> thm list) =
+  let infer th1 th2 (pre,insl : unifier) : thm list =
+    map (fun ins -> EQ_MP (conv_thm beta_eta_conv (substantiate (pre,ins) th1))
+                          (conv_thm beta_eta_conv (substantiate (pre,ins) th2))) insl in
+
+  let work th1 th2 : thm list =
+    let th1 = conv_thm beta_eta_conv th1 and th2 = conv_thm beta_eta_conv th2 in
+    let th1 = normalize_name th1 "x" "A" and th2 = normalize_name th2 "y" "B" in 
+    let u,v = dest_eq (concl th1) and p = concl th2 in
+    let asl1 = Array.of_list (hyp th1) and asl2 = Array.of_list (hyp th2) in
+    let n = Array.length asl1 and m = Array.length asl2 in
+    let pairs = map (fun x -> (x / m,x mod m)) (0--(n*m-1)) in
+    let rec dfs (ps : (int * int) list) (task : (term * term) list) : unifier list =
+      match ps with
+        (i,j)::t -> let res = dfs t task in
+                    if res = [] then []
+                    else (dfs t ((Array.get asl1 i,Array.get asl2 j)::task)) @ res
+      | [] -> [hol_unify task] in
+    let unfs = dfs pairs [u,p] in
+    flat (map (fun unf -> infer th1 th2 unf) unfs) in
+
+  fun th1 th2 ->
+    (* step 1: unify (concl th1) and (=) (u:U) (v:U)
+     * Rename th1 in case that th1 contains varible u or v
+     *)
+    let th1 = normalize_name th1 "x" "A" in
+    let pre,insl = hol_unify [snd (dest_thm th1),`(u:U) = (v:U)`] in
+    flat (map (fun ins -> work (substantiate (pre,ins) th1) th2) insl);;
+
