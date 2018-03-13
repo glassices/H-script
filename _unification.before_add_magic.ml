@@ -52,7 +52,7 @@ let rec dest_fun ty : hol_type list * hol_type =
   try let a,b = dest_fun_ty ty in
       let tyl,apex = dest_fun b in
       (a::tyl),apex
-  with Failure _ -> [],ty;;
+  with Failure "dest_fun_ty" -> [],ty;;
 
 (*
  * Input: ([`:A`; `:B`; `:C`], `:D`)
@@ -154,16 +154,17 @@ let (hol_unify : (term * term) list -> unifier) =
    *)
   let rec bound_eta_norm (tm1,tm2) : term * term =
     match tm1,tm2 with
-      Abs(bv1,bod1),Abs(bv2,bod2) -> let bod1,bod2 = bound_eta_norm (bod1,bod2) in
-                                     if not (vfree_in bv1 bod1) && not (vfree_in bv2 bod2) then bod1,bod2
-                                     else (try let f1,x1 = dest_comb bod1 in
-                                               if Pervasives.compare bv1 x1 = 0 && not (vfree_in bv1 f1) then f1
-                                               else mk_abs (bv1,bod1)
-                                           with Failure _ -> mk_abs (bv1,bod1)),
-                                          (try let f2,x2 = dest_comb bod2 in
-                                               if Pervasives.compare bv2 x2 = 0 && not (vfree_in bv2 f2) then f2
-                                               else mk_abs (bv2,bod2)
-                                           with Failure _ -> mk_abs (bv2,bod2))
+      Abs(bv1,bod1),Abs(bv2,bod2) ->
+        let bod1,bod2 = bound_eta_norm (bod1,bod2) in
+        if not (vfree_in bv1 bod1) && not (vfree_in bv2 bod2) then bod1,bod2
+        else (try let f1,x1 = dest_comb bod1 in
+                  if Pervasives.compare bv1 x1 = 0 && not (vfree_in bv1 f1) then f1
+                  else mk_abs (bv1,bod1)
+              with Failure _ -> mk_abs (bv1,bod1)),
+             (try let f2,x2 = dest_comb bod2 in
+                  if Pervasives.compare bv2 x2 = 0 && not (vfree_in bv2 f2) then f2
+                  else mk_abs (bv2,bod2)
+              with Failure _ -> mk_abs (bv2,bod2))
     | _ -> tm1,tm2 in
 
   (* decompose a beta-eta normal term into bound_vars,(head symbol,args)
@@ -192,7 +193,7 @@ let (hol_unify : (term * term) list -> unifier) =
   let bindex (var : term) (bvars : term list) : int =
     try let ret = index var (rev bvars) in
         (length bvars) - ret - 1
-    with Failure _ -> -1 in
+    with Failure "index" -> -1 in
 
   (* try to check rigid-rigid pairs
    * if rigid head not match then raise exception
@@ -216,13 +217,17 @@ let (hol_unify : (term * term) list -> unifier) =
   (* each pair of obj must have matched type *)
   let rec work (dep : int) (obj : (term * term) list) (tyins,tmins) sofar =
     (* check maximum depth *)
+    (*
     List.iter (fun (u,v) -> Printf.printf "0\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
+    *)
     if dep >= 5 then sofar else
     (* step 0: beta-eta normalization and kill extra bvars *)
     let obj = pmap beta_eta_term obj in
     let obj = map bound_eta_norm obj in
     (* step D: remove all identical pairs *)
+    (*
     List.iter (fun (u,v) -> Printf.printf "1\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
+    *)
     let obj = filter (fun (u,v) -> alphaorder u v <> 0) obj in
     (* step O: swap all bound-free pairs *)
     let obj = map (fun (u,v) -> if is_var v || not (head_free u) && head_free v then (v,u)
@@ -267,9 +272,9 @@ let (hol_unify : (term * term) list -> unifier) =
                            * So at most one of bodu,bodv will be FV, just move the FV to the
                            * latter
                            *)
-                          with Failure _ -> let u,v = hd obj in
-                                            let _,(_,argu) = decompose u in
-                                            if length argu = 0 then v,u else u,v in
+                          with Failure "find" -> let u,v = hd obj in
+                                                 let _,(_,argu) = decompose u in
+                                                 if length argu = 0 then v,u else u,v in
             let bv1,(hs1,args1) = decompose tm1 and bv2,(hs2,args2) = decompose tm2 in
             (* step I: imitation
              * Imitation will not consider to increase the depth of searching
@@ -304,12 +309,21 @@ let (hol_unify : (term * term) list -> unifier) =
       with Failure s when s = "check_rr" || s = "type_unify" -> sofar in
 
   (* DONE CHECKING *)
-  fun (obj : (term * term) list) ->
+  let unify obj =
     let tre,obj = rename obj in
     let tyins = try type_unify (pmap type_of obj)
-                with Failure _ -> failwith "hol_unify: Type unification failed" in
+                with Failure "type_unify" -> failwith "hol_unify: Type unification failed" in
     let obj = pmap (inst tyins) obj in
-    tre,work 0 obj (tyins,[]) [];;
+    tre,work 0 obj (tyins,[]) [] in
+
+  fun (obj : (term * term) list) ->
+    let tre,unfs = unify obj in
+    if forall (fun (tyins,tmins) ->
+                 forall (fun (tm1,tm2) ->
+                   alphaorder (beta_eta_term (vsubst tmins (inst tyins (vsubst tre tm1))))
+                              (beta_eta_term (vsubst tmins (inst tyins (vsubst tre tm2)))) = 0) obj) unfs then
+      tre,unfs
+    else failwith "hol_unify: produce wrong unifiers";;
 
 (*
  * normalize the name of freevars and typevars in a theorem
