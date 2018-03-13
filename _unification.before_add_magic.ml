@@ -39,7 +39,7 @@ let pmap f =
  *)
 let rec pop p l =
   match l with
-    [] -> failwith "pop: no proper element"
+    [] -> failwith "pop"
   | h::t -> if p(h) then h,t
             else let x,s = pop p t in x,(h::s);;
 
@@ -105,12 +105,12 @@ let (type_unify : (hol_type * hol_type) list -> (hol_type * hol_type) list) =
         if Pervasives.compare ty1 ty2 = 0 then sofar
         else safe_tyins (ty2,ty1) sofar
       else
-        if tfree_in ty1 ty2 then failwith "unify"
+        if tfree_in ty1 ty2 then failwith "type_unify"
         else safe_tyins (ty2,ty1) sofar
     else
       let op1,args1 = dest_type ty1 and op2,args2 = dest_type ty2 in
       if op1 = op2 then itlist2 unify args1 args2 sofar
-      else failwith "unify" in
+      else failwith "type_unify" in
   fun obj ->
     let obj = filter (fun (u,v) -> Pervasives.compare u v <> 0) obj in
     let obj1,obj2 = unzip obj in
@@ -231,7 +231,7 @@ let (hol_unify : (term * term) list -> unifier) =
     try let (fv,tm),obj = pop (fun (u,v) -> is_var u && not (vfree_in u v)) obj in
         let tmins = safe_tmins (tm,fv) tmins in
         work dep (pmap (vsubst [tm,fv]) obj) (tyins,tmins) sofar
-    with Failure _ ->
+    with Failure "pop" ->
       (* step T_S: match all types of const head
        * might cause incompleteness here *)
       try let tmp_ins = type_unify (check_rr obj) in
@@ -253,7 +253,7 @@ let (hol_unify : (term * term) list -> unifier) =
                   bv1,bv2 @ extra,args1,args2 @ extra in
               let obj = itlist2 (fun u1 u2 t -> (mk_term bv1 u1,mk_term bv2 u2)::t) args1 args2 obj in
               work dep obj (tyins,tmins) sofar
-          with Failure _ ->
+          with Failure "pop" ->
             if length obj = 0 then (tyins,tmins)::sofar else
             let tm1,tm2 = try find (fun (u,v) -> not (head_free v)) obj 
                           (* In the case only flex-flex cases exist, just pick the first
@@ -299,9 +299,9 @@ let (hol_unify : (term * term) list -> unifier) =
                   let tyins' = itlist safe_tyins tty tyins in
                   let tmins' = safe_tmins (t,x) (pmap (inst tty) tmins) in
                   work (dep+1) (pmap ((vsubst [t,x]) o (inst tty)) obj) (tyins',tmins') sofar
-              with Failure _ -> sofar in
+              with Failure "type_unify" -> sofar in
             itlist noname (0--((length bvars)-1)) sofar
-      with Failure _ -> sofar in
+      with Failure s when s = "check_rr" || s = "type_unify" -> sofar in
 
   (* DONE CHECKING *)
   fun (obj : (term * term) list) ->
