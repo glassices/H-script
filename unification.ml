@@ -21,6 +21,11 @@
 type solidifier =
   (term * term) list * (hol_type * hol_type) list * (term * term) list;;
 
+type unifier = (hol_type * hol_type) list * (term * term) list;;
+
+type unify_thm ((tyins,tmins) : unifier) th =
+  INST tmins (INST_TYPE tyins th);;
+
 let null_sdf = ([],[],[] : solidifier);;
 
 let solidify_term ((pre,tyins,tmins) : solidifier) tm =

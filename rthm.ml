@@ -25,28 +25,53 @@ let fnames_of_thm (th : thm) =
   let fvars = freesl (c::asl) in
   term_image (fst o dest_var) fvars;;
 
+let varyname_thm th =
+  let rec variant avoid s =
+    if not (mem s avoid) then s
+    else variant avoid (s ^ "'") in
+  let rec f fvars used =
+    match fvars with
+      h::t -> let name,_ = dest_var h in
+              let name' = variant used name in
+              if name' = name then f t (name'::used)
+              else (mk_var(name',type_of h),h)::(f t (name'::used))
+    | [] -> [] in
+  let asl,c = dest_thm th in
+  let fvars = freesl (c::asl) in
+  INST (f fvars []) th;;
+
 module type Rthm_kernel =
   sig
     type rthm
 
     val mk_rthm : thm -> rthm
-    val dest_rthm : rthm -> term list * term * term list * (solidifier -> thm)
+    val dest_rthm : rthm -> term list * term * term list
 
 end;;
 
 module Rthm : Rthm_kernel = struct
 
   (*
-   * any term in a rthm must be beta-eta normal form
+   * Philosopy of Rthm
+   * 1: Any term in a rthm MUST be beta-eta normal form
+   * 2: Different variables MUST have different names
+   * 3: For any theta related to inst or inst_type, dom(theta) MUST be disjoint to codom(theta)
+   * 4: dom(tyins) and dom(tmins) must be in FV(asl,c) and codom(tmins) must be out of FV(asl,c)
+   * 5*: sigma function is private and can not be called from the outside
+   * TODO: modify unification.ml according to these three rules
    *)
-  type rthm = Rhythm of (term list * term * term list * (solidifier -> thm))
+  type rthm = Rhythm of (term list * term * term list * (unifier -> thm))
+
+  let is_valid ((tyins,tmins) : unifier) : bool =
+    true
 
   let mk_rthm th =
     let th = conv_thm beta_eta_conv th in
+    let th = varyname_thm th in
     let asl,c = dest_thm th in
-    Rhythm(asl,c,[],fun (x : solidifier) -> th)
+    Rhythm(asl,c,[],fun (x : unifier) -> th)
 
-  let dest_rthm (Rhythm(asl,c,rsl,sigma)) = (asl,c,rsl,sigma)
+  let dest_rthm (Rhythm(asl,c,rsl,sigma)) = (asl,c,rsl)
 
 end;;
 
