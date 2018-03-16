@@ -39,9 +39,17 @@ let rec mk_lcomb (f : term) (args : term list) : term =
     h::t -> mk_lcomb (mk_comb (f,h)) t
   | [] -> f;;
 
+let (beta_conv : conv) = TOP_DEPTH_CONV BETA_CONV;;
+
+let (eta_conv : conv) = TOP_DEPTH_CONV ETA_CONV;;
+
+let (top_eta_conv : conv) = TRY_CONV ETA_CONV;;
+
 let (beta_eta_conv : conv) = (TOP_DEPTH_CONV BETA_CONV) THENC (TOP_DEPTH_CONV ETA_CONV);;
 
 let (beta_eta_term : term -> term) = rand o concl o beta_eta_conv;;
+
+let conv_term (cnv : conv) = rand o concl o cnv;;
 
 (* conv the concl of a theorem *)
 let conv_concl (cnv : conv) (th : thm) : thm =
@@ -55,3 +63,29 @@ let conv_thm (cnv : conv) (th : thm) : thm =
     let gth = EQ_MP (SYM eth) (ASSUME (rand (concl eth))) in
     EQ_MP (DEDUCT_ANTISYM_RULE gth th) gth in
   conv_concl cnv (itlist work asl th);;
+
+(* get bound variables and remain term
+ * Input: `\x y z. f x y z`
+ * Output: ([`x`; `y`; `z`], `f x y z`)
+ * DONE CHECKING
+ *)
+let rec get_bound (tm : term) : term list * term =
+  match tm with
+    Abs(bvar,bod) -> let tml,tm' = get_bound bod in (bvar::tml),tm'
+  | _ -> [],tm;;
+
+(* decompose a beta-eta normal term into bound_vars,(head symbol,args)
+ * DONE CHECKING
+ *)
+let decompose (tm : term) : term list * (term * term list) =
+  let bvars,ctm = get_bound tm in
+  bvars,strip_comb ctm;;
+
+(*
+ * mk_term [x1;x2;x3] t = \x1 x2 x3. t
+ * DONE CHECKING
+ *)
+let rec mk_term bvars bod =
+  match bvars with
+    [] -> bod
+  | h::t -> mk_abs (h,mk_term t bod);;

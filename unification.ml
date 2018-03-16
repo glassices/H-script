@@ -18,20 +18,17 @@
  * Greedy instantiation. Won't introduce any typevar
  *)
 
-type solidifier =
+needs "script/kit.ml";;
+
+type unifier =
   (term * term) list * (hol_type * hol_type) list * (term * term) list;;
 
-type unifier = (hol_type * hol_type) list * (term * term) list;;
+let null_unf = ([],[],[] : unifier);;
 
-type unify_thm ((tyins,tmins) : unifier) th =
-  INST tmins (INST_TYPE tyins th);;
-
-let null_sdf = ([],[],[] : solidifier);;
-
-let solidify_term ((pre,tyins,tmins) : solidifier) tm =
+let unify_term ((pre,tyins,tmins) : unifier) tm =
   vsubst tmins (inst tyins (vsubst pre tm));;
 
-let solidify_thm ((pre,tyins,tmins) : solidifier) th =
+let unify_thm ((pre,tyins,tmins) : unifier) th =
   INST tmins (INST_TYPE tyins (INST pre th));;
 
 let safe_tyins i theta =
@@ -86,16 +83,6 @@ let hol_unify (avoid : string list) =
     let tre = map (fun var -> (mk_var (new_name true, type_of var),var)) fvars in
     tre,pmap (vsubst tre) obj in
 
-  (* get bound variables and remain term
-   * Input: `\x y z. f x y z`
-   * Output: ([`x`; `y`; `z`], `f x y z`)
-   * DONE CHECKING
-   *)
-  let rec get_bound (tm : term) : term list * term =
-    match tm with
-      Abs(bvar,bod) -> let tml,tm' = get_bound bod in (bvar::tml),tm'
-    | _ -> [],tm in
-
   (*
    * mk_term [x1;x2;x3] t = \x1 x2 x3. t
    * DONE CHECKING
@@ -125,13 +112,6 @@ let hol_unify (avoid : string list) =
                   else mk_abs (bv2,bod2)
               with Failure _ -> mk_abs (bv2,bod2))
     | _ -> tm1,tm2 in
-
-  (* decompose a beta-eta normal term into bound_vars,(head symbol,args)
-   * DONE CHECKING
-   *)
-  let decompose (tm : term) : term list * (term * term list) =
-    let bvars,ctm = get_bound tm in
-    bvars,strip_comb ctm in
 
   (* test whether the head symbol is a free variable of a term
    * DONE CHECKING
@@ -277,10 +257,10 @@ let hol_unify (avoid : string list) =
     map (fun (a,b) -> tre,a,b) (work 0 0 obj (tyins,[]) []) in
 
   fun (obj : (term * term) list) ->
-    let sdfs = unify obj in
-    if forall (fun sdf ->
+    let unfs = unify obj in
+    if forall (fun unf ->
                  forall (fun (tm1,tm2) ->
-                   alphaorder (beta_eta_term (solidify_term sdf tm1))
-                              (beta_eta_term (solidify_term sdf tm2)) = 0) obj) sdfs then
-      sdfs
+                   alphaorder (beta_eta_term (unify_term unf tm1))
+                              (beta_eta_term (unify_term unf tm2)) = 0) obj) unfs then
+      unfs
     else failwith "hol_unify: produce wrong unifiers";;
