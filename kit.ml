@@ -1,3 +1,12 @@
+let safe_map f mes =
+  let rec mapf l =
+    match l with
+      h::t -> (try let y = f h in
+                   y::(mapf t)
+               with Failure s when s = mes -> mapf t)
+    | [] -> [] in
+  mapf;;
+
 let pmap f =
   let rec pmapf l =
     match l with
@@ -36,7 +45,7 @@ let rec mk_fun (tyl,apex) : hol_type =
  *)
 let rec mk_lcomb (f : term) (args : term list) : term =
   match args with
-    h::t -> mk_lcomb (mk_comb (f,h)) t
+    h::t -> mk_lcomb (mk_comb(f,h)) t
   | [] -> f;;
 
 let (beta_conv : conv) = TOP_DEPTH_CONV BETA_CONV;;
@@ -88,4 +97,4 @@ let decompose (tm : term) : term list * (term * term list) =
 let rec mk_term bvars bod =
   match bvars with
     [] -> bod
-  | h::t -> mk_abs (h,mk_term t bod);;
+  | h::t -> mk_abs(h,mk_term t bod);;

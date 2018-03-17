@@ -80,7 +80,7 @@ let hol_unify (avoid : string list) =
   (* DONE CHECKING *)
   let rename obj =
     let fvars = itlist (fun (tm1,tm2) b -> union (union (frees tm1) (frees tm2)) b) obj [] in
-    let tre = map (fun var -> (mk_var (new_name true, type_of var),var)) fvars in
+    let tre = map (fun var -> (mk_var(new_name true, type_of var),var)) fvars in
     tre,pmap (vsubst tre) obj in
 
   (*
@@ -90,7 +90,7 @@ let hol_unify (avoid : string list) =
   let rec mk_term bvars bod =
     match bvars with
       [] -> bod
-    | h::t -> mk_abs (h,mk_term t bod) in
+    | h::t -> mk_abs(h,mk_term t bod) in
 
   (*
    * Strip off the binder \x where x does not occur in both terms
@@ -105,12 +105,12 @@ let hol_unify (avoid : string list) =
         if not (vfree_in bv1 bod1) && not (vfree_in bv2 bod2) then bod1,bod2
         else (try let f1,x1 = dest_comb bod1 in
                   if Pervasives.compare bv1 x1 = 0 && not (vfree_in bv1 f1) then f1
-                  else mk_abs (bv1,bod1)
-              with Failure _ -> mk_abs (bv1,bod1)),
+                  else mk_abs(bv1,bod1)
+              with Failure _ -> mk_abs(bv1,bod1)),
              (try let f2,x2 = dest_comb bod2 in
                   if Pervasives.compare bv2 x2 = 0 && not (vfree_in bv2 f2) then f2
-                  else mk_abs (bv2,bod2)
-              with Failure _ -> mk_abs (bv2,bod2))
+                  else mk_abs(bv2,bod2)
+              with Failure _ -> mk_abs(bv2,bod2))
     | _ -> tm1,tm2 in
 
   (* test whether the head symbol is a free variable of a term
@@ -224,21 +224,21 @@ let hol_unify (avoid : string list) =
             let sofar =
               if is_const hs2 then
                 let tyl1,apx1 = dest_fun (type_of hs1) and tyl2,apx2 = dest_fun (type_of hs2) in
-                let bvars = map (fun ty -> mk_var (new_name false,ty)) tyl1 in
-                let args = map (fun ty -> mk_lcomb (mk_var (new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
+                let bvars = map (fun ty -> mk_var(new_name false,ty)) tyl1 in
+                let args = map (fun ty -> mk_lcomb (mk_var(new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
                 let tm = mk_term bvars (mk_lcomb hs2 args) in
                 let tmins' = safe_tmins (tm,hs1) tmins in
                 work (tot+1) dep (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
               else sofar in
             (* step T_P and P: projection *)
             let tyl1,apx1 = dest_fun (type_of hs1) in
-            let bvars = map (fun ty -> mk_var (new_name false,ty)) tyl1 in
+            let bvars = map (fun ty -> mk_var(new_name false,ty)) tyl1 in
             let noname (k : int) sofar =
               let pvar = el k bvars in
               let tyl2,apx2 = dest_fun (type_of pvar) in
               (* unify type apx1 and apx2 *)
               try let tty = type_unify [apx1,apx2] in
-                  let args = map (fun ty -> mk_lcomb (mk_var (new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
+                  let args = map (fun ty -> mk_lcomb (mk_var(new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
                   let tm = mk_term bvars (mk_lcomb pvar args) in
                   let t,x = inst tty tm,inst tty hs1 in
                   let tyins' = itlist safe_tyins tty tyins in
