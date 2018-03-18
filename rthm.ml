@@ -1,5 +1,7 @@
 needs "script/unification.ml";;
 
+(* optimize eta-conv after ABS *)
+
 if not (can get_const_type "mogic") then
   new_constant("mogic",`:A`);;
 
@@ -33,6 +35,7 @@ module type Rthm_kernel =
     val dest_rthm : rthm -> term list * term * term list
     val rhyp : rthm -> term list
     val rconcl : rthm -> term
+    val rrsl : rthm -> term list
     val get_rthm : rthm -> (unifier list) -> thm
 
     val normalize_name : rthm -> string -> string -> rthm
@@ -43,12 +46,6 @@ module type Rthm_kernel =
     val rdeduct : rthm -> rthm -> rthm list
 
     val gen_compare : rthm -> rthm -> int
-
-    val h1 : unit -> rthm
-    val h2 : unit -> rthm
-    val u1 : unit -> unifier
-    val u2 : unit -> unifier
-
 end;;
 
 let h = ref ([] : unifier list);;
@@ -65,17 +62,6 @@ module Rthm : Rthm_kernel = struct
 
   type rthm = Rhythm of (term list * term * term list * (unifier list -> thm))
 
-  let mk_rthm th =
-    let th = conv_thm beta_eta_conv th in
-    let asl,c = dest_thm th in
-    Rhythm(asl,c,[],fun unfl -> conv_thm beta_eta_conv (rev_itlist unify_thm unfl th))
-
-  let dest_rthm (Rhythm(asl,c,rsl,_)) = (asl,c,rsl)
-
-  let rhyp (Rhythm(asl,_,_,_)) = asl
-  
-  let rconcl (Rhythm(_,c,_,_)) = c
-
   let rec is_mogical tm =
     match tm with
       Comb(f,x) -> is_mogical f || is_mogical x
@@ -83,14 +69,10 @@ module Rthm : Rthm_kernel = struct
     | Const("mogic",_) -> true
     | _ -> false
 
-  let get_rthm (Rhythm(_,_,rsl,invoke)) unfl =
-    (* check whether unfl can clean "mogic" *)
-    do_list (fun tm -> if is_mogical (beta_eta_term (rev_itlist unify_term unfl tm)) then
-                         failwith "get_rthm"
-                       else ()) rsl;
-    invoke unfl
-
-  let purify (asl,c,rsl) =
+  let tinker (asl,c,rsl,invoke) =
+    (* asl,c,rsl might not be in beta-eta normal form
+     * invoke must return a theorem in normal form
+     *)
     let qsort = List.sort (fun x y -> Pervasives.compare x y) in
 
     let rec clean bvars fvars =
@@ -105,7 +87,7 @@ module Rthm : Rthm_kernel = struct
       let hsym,args = strip_comb bod in
       let env = env @ bvars in
       if is_const hsym && fst (dest_const hsym) = "mogic" then
-        failwith "purify"
+        failwith "tinker"
       else if is_const hsym || mem hsym env then
         itlist ((@) o (work env)) args []
       else if is_mogical bod then
@@ -114,26 +96,56 @@ module Rthm : Rthm_kernel = struct
         [conv_term eta_conv (mk_term bvars bod)]
       else [] in
 
+    let self_reduce asl c =
+      (* can not self-deduced
+       * For a sequent A |- a, there does not exist a unifier s, such that
+       * s(a) = a, s(A) is a proper subset of A
+       * TODO
+       *)
+
+
     (* beta-eta normalization, deduplicate, simple work on rsl *)
     let asl = uniq (qsort (map beta_eta_term asl)) in
     let c = beta_eta_term c in
+
+    let unf = self_reduce asl c in
+    (* TODO unify *)
+
+
     let rsl = map beta_eta_term rsl in
     let rsl = uniq (qsort (itlist ((@) o (work [])) rsl [])) in
-    (asl,c,rsl)
 
-  (*
-   * TODO deep purify: kill all FVs that dont appear in asl,c
-   *)
+    if rsl = [] then
+      let th = invoke [] in
+      Rhythm(asl,c,rsl,fun unfl -> conv_thm beta_eta_conv (rev_itlist unify_thm unfl th))
+    else Rhythm(asl,c,rsl,invoke)
+
+  let mk_rthm th =
+    let th = conv_thm beta_eta_conv th in
+    let asl,c = dest_thm th in
+    tinker(asl,c,[],fun unfl -> conv_thm beta_eta_conv (rev_itlist unify_thm unfl th))
+
+  let dest_rthm (Rhythm(asl,c,rsl,_)) = (asl,c,rsl)
+
+  let rhyp (Rhythm(asl,_,_,_)) = asl
+  
+  let rconcl (Rhythm(_,c,_,_)) = c
+
+  let rrsl (Rhythm(_,_,rsl,_)) = rsl
+
+  let get_rthm (Rhythm(_,_,rsl,invoke)) unfl =
+    (* check whether unfl can clean "mogic" *)
+    do_list (fun tm -> if is_mogical (beta_eta_term (rev_itlist unify_term unfl tm)) then
+                         failwith "get_rthm"
+                       else ()) rsl;
+    invoke unfl
 
   let rinst unf (Rhythm(asl,c,rsl,invoke)) =
-    let asl,c,rsl = try purify (map (unify_term unf) asl,
-                                unify_term unf c,
-                                map (unify_term unf) rsl)
-                    with Failure "purify" -> failwith "rinst" in
-    if rsl = [] then
-      let th = invoke [unf] in
-      Rhythm(asl,c,[],fun unfl -> conv_thm beta_eta_conv (rev_itlist unify_thm unfl th))
-    else Rhythm(asl,c,rsl,fun unfl -> invoke (unf::unfl))
+    try tinker(map (unify_term unf) asl,
+               unify_term unf c,
+               map (unify_term unf) rsl,
+               fun unfl -> invoke (unf::unfl))
+    with Failure "tinker" -> failwith "rinst"
 
   (*
    * normalize the name of freevars and typevars in a rtheorem
@@ -181,44 +193,50 @@ module Rthm : Rthm_kernel = struct
     | _ -> tm
 
   let rtrans rth1 rth2 =
-    let infer rth1 rth2 (unf : unifier) : rthm =
-      try let (Rhythm(asl1,c1,rsl1,invoke1)) = rinst unf rth1 in
-          let (Rhythm(asl2,c2,rsl2,invoke2)) = rinst unf rth2 in
-          Rhythm(union asl1 asl2,mk_eq(lhs c1,rhs c2),union rsl1 rsl2,
-                 fun unfl -> TRANS (invoke1 unfl) (invoke2 unfl))
-      with Failure "rinst" -> failwith "infer" in
+    let infer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) (unf : unifier) : rthm =
+      (*
+      printf "-------------------\n%s\n%s\n%s\n%s\n%s\n%s\n"
+             (string_of_term c1) (string_of_term c2)
+             (string_of_term (unify_term unf c1))
+             (string_of_term (unify_term unf c2))
+             (string_of_term (concl (invoke1 [unf])))
+             (string_of_term (concl (invoke2 [unf])));
+      printf "%s\n" (string_of_term (concl (TRANS (invoke1 [unf]) (invoke2 [unf]))));
+      *)
+      try tinker((map (unify_term unf) asl1) @ (map (unify_term unf) asl2),
+                 mk_eq(lhs (unify_term unf c1),rhs (unify_term unf c2)),
+                 (map (unify_term unf) rsl1) @ (map (unify_term unf) rsl2),
+                 fun unfl -> TRANS (invoke1 (unf::unfl)) (invoke2 (unf::unfl)))
+      with Failure "tinker" -> failwith "infer" in
 
     let linfer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) (pre,tyins,tmins) cty =
       try let x = mk_var(abs_name,cty) in
           let unfm = (pre,tyins,map (fun (b,a) -> (c_mogic b,a)) tmins) in
           let unfx = (pre,tyins,map (fun (b,a) -> (c_movar b,a)) tmins) in
           let s,t = dest_eq c1 and u,v = dest_eq c2 in
-          let asl,c,rsl = purify(map (unify_term unfm) (asl1 @ asl2),
-                                 mk_eq(unify_term unfm s,mk_abs(x,unify_term unfx v)),
-                                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [s;t])) in
-          (* (\x. T) c <=> T *)
-          Rhythm(asl,c,rsl,
+          tinker(map (unify_term unfm) (asl1 @ asl2),
+                 mk_eq(unify_term unfm s,mk_abs(x,unify_term unfx v)),
+                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [s;t]),
                  fun unfl -> TRANS (invoke1 (unfx::unfl))
-                                   (conv_concl top_eta_conv
+                                   (conv_concl eta_conv
                                                (ABS (rev_itlist (fun (_,tyins,_) v -> inst tyins v) unfl x)
                                                     (invoke2 (unfx::unfl)))))
-      with Failure "purify" -> failwith "linfer" in
+      with Failure "tinker" -> failwith "infer" in
 
     let rinfer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) (pre,tyins,tmins) cty =
+      let unf = (pre,tyins,tmins) in
       try let x = mk_var(abs_name,cty) in
           let unfm = (pre,tyins,map (fun (b,a) -> (c_mogic b,a)) tmins) in
           let unfx = (pre,tyins,map (fun (b,a) -> (c_movar b,a)) tmins) in
           let s,t = dest_eq c1 and u,v = dest_eq c2 in
-          let asl,c,rsl = purify(map (unify_term unfm) (asl1 @ asl2),
-                                 mk_eq(mk_abs(x,unify_term unfx s),unify_term unfm v),
-                                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [u;v])) in
-          (* (\x. T) c <=> T *)
-          Rhythm(asl,c,rsl,
-                 fun unfl -> TRANS (conv_concl top_eta_conv
+          tinker(map (unify_term unfm) (asl1 @ asl2),
+                 mk_eq(mk_abs(x,unify_term unfx s),unify_term unfm v),
+                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [u;v]),
+                 fun unfl -> TRANS (conv_concl eta_conv
                                                (ABS (rev_itlist (fun (_,tyins,_) v -> inst tyins v) unfl x)
                                                     (invoke1 (unfx::unfl))))
                                    (invoke2 (unfx::unfl)))
-      with Failure "purify" -> failwith "rinfer" in
+      with Failure "tinker" -> failwith "infer" in
 
     let work rth1 rth2 : rthm list =
       let rth1 = normalize_name rth1 "x" "A" and rth2 = normalize_name rth2 "y" "B" in
@@ -243,7 +261,7 @@ module Rthm : Rthm_kernel = struct
                         let c = mk_const("tmp",[a,`:A`]) in
                         let unfs = dfs pairs [mk_comb(t,c),u] in
                         safe_map (fun ((_,tyins,_) as unf) ->
-                                  linfer rth1 rth2 unf (type_subst tyins a)) "linfer" unfs
+                                  linfer rth1 rth2 unf (type_subst tyins a)) "infer" unfs
                     with Failure "type_unify" -> []
                 with Failure "dest_fun_ty" -> [] in
       let rtd = try let a,b = dest_fun_ty (type_of u) in
@@ -251,7 +269,7 @@ module Rthm : Rthm_kernel = struct
                         let c = mk_const("tmp",[a,`:A`]) in
                         let unfs = dfs pairs [t,mk_comb(u,c)] in
                         safe_map (fun ((_,tyins,_) as unf) ->
-                                  rinfer rth1 rth2 unf (type_subst tyins a)) "rinfer" unfs
+                                  rinfer rth1 rth2 unf (type_subst tyins a)) "infer" unfs
                     with Failure "type_unify" -> []
                 with Failure "dest_fun_ty" -> [] in
       std @ ltd @ rtd in
@@ -266,22 +284,13 @@ module Rthm : Rthm_kernel = struct
     let r2 = safe_map (fun unf -> rinst unf rth2) "rinst" unf2 in
     flat (allpairs (fun x y -> work x y) r1 r2)
 
-  let hh1 = ref (mk_rthm (ASSUME `x:bool`))
-  let hh2 = ref (mk_rthm (ASSUME `x:bool`))
-  let uu1 = ref null_unf
-  let uu2 = ref null_unf
-  let h1 () = !hh1
-  let h2 () = !hh2
-  let u1 () = !uu1
-  let u2 () = !uu2
-
   let req_mp rth1 rth2 =
-    let infer rth1 rth2 (unf : unifier) : rthm =
-      try let (Rhythm(asl1,c1,rsl1,invoke1)) = rinst unf rth1 in
-          let (Rhythm(asl2,c2,rsl2,invoke2)) = rinst unf rth2 in
-          Rhythm(union asl1 asl2,rhs c1,union rsl1 rsl2,
-                 fun unfl -> EQ_MP (invoke1 unfl) (invoke2 unfl))
-      with Failure "rinst" -> failwith "infer" in
+    let infer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) unf =
+      try tinker((map (unify_term unf) asl1) @ (map (unify_term unf) asl2),
+                 rhs (unify_term unf c1),
+                 (map (unify_term unf) rsl1) @ (map (unify_term unf) rsl2),
+                 fun unfl -> EQ_MP (invoke1 (unf::unfl)) (invoke2 (unf::unfl)))
+      with Failure "tinker" -> failwith "infer" in
 
     let ninfer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) (pre,tyins,tmins) cty =
       (* (s = t) = p and u = v *)
@@ -290,16 +299,14 @@ module Rthm : Rthm_kernel = struct
           let unfx = (pre,tyins,map (fun (b,a) -> (c_movar b,a)) tmins) in
           let q,p = dest_eq c1 in
           let s,t = dest_eq q in
-          let asl,c,rsl = purify(map (unify_term unfm) (asl1 @ asl2),
-                                 unify_term unfm p,
-                                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [s;t;p])) in
-          (* (\x. T) c <=> T *)
-          Rhythm(asl,c,rsl,
+          tinker(map (unify_term unfm) (asl1 @ asl2),
+                 unify_term unfm p,
+                 map (unify_term unfm) (rsl1 @ rsl2 @ asl1 @ asl2 @ [s;t;p]),
                  fun unfl -> EQ_MP (invoke1 (unfx::unfl))
-                                   (conv_concl top_eta_conv
+                                   (conv_concl eta_conv
                                                (ABS (rev_itlist (fun (_,tyins,_) v -> inst tyins v) unfl x)
                                                     (invoke2 (unfx::unfl)))))
-      with Failure "purify" -> failwith "ninfer" in
+      with Failure "tinker" -> failwith "infer" in
 
     let work rth1 rth2 : rthm list =
       let rth1 = normalize_name rth1 "x" "A" and rth2 = normalize_name rth2 "y" "B" in
@@ -340,7 +347,7 @@ module Rthm : Rthm_kernel = struct
               let c = mk_const("tmp",[a,`:A`]) in
               let unfs = dfs pairs [mk_comb(s,c),u;mk_comb(t,c),v] in
               safe_map (fun ((_,tyins,_) as unf) ->
-                        ninfer rth1 rth2 unf (type_subst tyins a)) "ninfer" unfs
+                        ninfer rth1 rth2 unf (type_subst tyins a)) "infer" unfs
           with Failure "type_unify" -> []
       with Failure "dest_fun_ty" -> [] in
 
@@ -364,14 +371,13 @@ module Rthm : Rthm_kernel = struct
     std @ rtd
 
   let rmk_comb rth1 rth2 =
-    let infer rth1 rth2 (unf : unifier) : rthm =
-      try let (Rhythm(asl1,c1,rsl1,invoke1)) = rinst unf rth1 in
-          let (Rhythm(asl2,c2,rsl2,invoke2)) = rinst unf rth2 in
-          Rhythm(union asl1 asl2,mk_eq(beta_eta_term (mk_comb(lhs c1,lhs c2)),
-                                       beta_eta_term (mk_comb(rhs c1,rhs c2))),
-                 union rsl1 rsl2,
-                 fun unfl -> conv_thm beta_eta_conv (MK_COMB(invoke1 unfl,invoke2 unfl)))
-      with Failure "rinst" -> failwith "infer" in
+    let infer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) unf =
+      try tinker((map (unify_term unf) asl1) @ (map (unify_term unf) asl2),
+                 mk_eq(mk_comb(lhs (unify_term unf c1),lhs (unify_term unf c2)),
+                       mk_comb(rhs (unify_term unf c1),rhs (unify_term unf c2))),
+                 (map (unify_term unf) rsl1) @ (map (unify_term unf) rsl2),
+                 fun unfl -> conv_thm beta_eta_conv (MK_COMB(invoke1 (unf::unfl),invoke2 (unf::unfl))))
+      with Failure "tinker" -> failwith "infer" in
 
     let work rth1 rth2 : rthm list =
       let rth1 = normalize_name rth1 "x" "A" and rth2 = normalize_name rth2 "y" "B" in
@@ -404,14 +410,14 @@ module Rthm : Rthm_kernel = struct
     flat (allpairs (fun x y -> work x y) r1 r2)
 
   let rdeduct rth1 rth2 =
-    let infer rth1 rth2 (unf : unifier) : rthm =
+    let infer rth1 rth2 unf =
       try let (Rhythm(asl1,c1,rsl1,invoke1)) = rinst unf rth1 in
           let (Rhythm(asl2,c2,rsl2,invoke2)) = rinst unf rth2 in
-          Rhythm(union (subtract asl1 [c2]) (subtract asl2 [c1]),
-                 mk_eq(c1,c2),union rsl1 rsl2,
+          tinker(union (subtract asl1 [c2]) (subtract asl2 [c1]),
+                 mk_eq(c1,c2), union rsl1 rsl2,
                  fun unfl -> conv_thm beta_eta_conv
                                       (DEDUCT_ANTISYM_RULE (invoke1 unfl) (invoke2 unfl)))
-      with Failure "rinst" -> failwith "infer" in
+      with Failure "rinst" | Failure "tinker" -> failwith "infer" in
 
     let rth1 = normalize_name rth1 "x" "A" and rth2 = normalize_name rth2 "y" "B" in
     let fnames = union (vnames_of_rthm rth1) (vnames_of_rthm rth2) in

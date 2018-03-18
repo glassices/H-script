@@ -20,6 +20,8 @@
 
 needs "script/kit.ml";;
 
+let hackl = ref ([] : (term * term) list);;
+
 type unifier =
   (term * term) list * (hol_type * hol_type) list * (term * term) list;;
 
@@ -30,6 +32,100 @@ let unify_term ((pre,tyins,tmins) : unifier) tm =
 
 let unify_thm ((pre,tyins,tmins) : unifier) th =
   INST tmins (INST_TYPE tyins (INST pre th));;
+
+(*
+ * Constantize and variablize a term
+ *)
+
+let n_fc_limit = 50 and n_ft_limit = 30;;
+
+for i = 0 to n_fc_limit do
+  if not (can get_const_type ("_c_" ^ (string_of_int i))) then
+    new_constant("_c_" ^ (string_of_int i),`:A`)
+done;;
+
+for i = 0 to n_ft_limit do
+  if not (can get_type_arity ("_t_" ^ (string_of_int i))) then
+    new_type("_t_" ^ (string_of_int i),0)
+done;;
+
+(* given a term list, constantize it, and output the result and the dict for
+ * constants and types *)
+let constantize (tml : term list) : term list * (string * string) list * (hol_type * string) list =
+  let fvars = freesl tml in
+  let tvars = itlist (union o type_vars_in_term) tml [] in
+  if (length fvars) < n_fc_limit && (length tvars) < n_ft_limit then
+    let tmins = List.mapi (fun i var -> "_c_" ^ (string_of_int i),var) fvars in
+    let tyins = List.mapi (fun i var -> mk_type("_t_" ^ (string_of_int i),[]),var) tvars in
+
+    let rec con_term env tm =
+      match tm with
+        Comb(f,x)  -> let f' = con_term env f and x' = con_term env x in
+                      if f' == f && x' == x then tm else mk_comb(f',x')
+      | Abs(y,t)   -> let y' = inst tyins y in
+                      let t' = con_term (y::env) t in
+                      if y' == y && t' == t then tm else mk_abs(y',t')
+      | Const(_,_) -> inst tyins tm
+      | Var(n,ty)  -> if mem tm env then inst tyins tm else
+                      let ty' = type_subst tyins ty in
+                      mk_const(rev_assoc tm tmins,[ty',`:A`]) in
+                         
+    (qmap (con_term []) tml,
+     List.mapi (fun i var -> fst(dest_var var),"_c_" ^ (string_of_int i)) fvars,
+     List.mapi (fun i tyvar -> tyvar,"_t_" ^ (string_of_int i)) tvars)
+  else failwith "constantize";;
+
+let rec varize_ty (dt : (hol_type * string) list) = let rec work ty =
+    match ty with
+      Tyapp(tycon,args) -> if args <> [] then
+                             let args' = qmap work args in
+                             if args' == args then ty else mk_type(tycon,args')
+                           else if (String.sub tycon 0 3) = "_t_" then
+                             rev_assoc tycon dt
+                           else ty
+    | Tyvar(_) -> ty in
+  fun ty -> work ty;;
+
+exception Conflict of term;;
+
+let rec varize_tm (dc : (string * string) list) (dt : (hol_type * string) list) =
+  (* return not only free vars but also temporary constants *)
+  let rec exfrees tm =
+    match tm with
+      Var(_,_) -> [tm]
+    | Const(c,_) -> if (String.sub c 0 3) = "_c_" then [tm] else []
+    | Abs(bv,bod) -> subtract (exfrees bod) [bv]
+    | Comb(s,t) -> union (exfrees s) (exfrees t) in
+
+  let rec work env tm =
+    match tm with
+      Comb(f,x)   -> let f' = work env f and x' = work env x in
+                     if f' == f && x' == x then tm else mk_comb(f',x')
+    | Var(n,ty)   -> let ty' = varize_ty dt ty in
+                     let tm' = if ty' == ty then tm else mk_var(n,ty') in
+                     if Pervasives.compare (rev_assocd tm' env tm) tm = 0
+                     then tm'
+                     else raise (Conflict tm')
+    | Const(c,ty) -> let ty' = varize_ty dt ty in
+                     if (String.sub c 0 3) <> "_c_" then
+                       if ty' == ty then tm else
+                       let tyins = type_match (type_of (mk_const(c,[]))) ty' [] in
+                       mk_const(c,tyins)
+                     else let tm' = mk_var(rev_assoc c dc,ty') in
+                          if Pervasives.compare (rev_assocd tm' env tm) tm = 0
+                          then tm'
+                          else raise (Conflict tm')
+    | Abs(y,t)    -> let y' = work [] y in
+                     let env' = (y,y')::env in
+                     try let t' = work env' t in
+                         if y' == y && t' == t then tm else mk_abs(y',t')
+                     with (Conflict(w') as ex) ->
+                     if Pervasives.compare w' y' <> 0 then raise ex else
+                     let ifrees = map (work []) (exfrees t) in
+                     let y'' = variant ifrees y' in
+                     let z = mk_var(fst(dest_var y''),snd(dest_var y)) in
+                     work env (mk_abs(z,vsubst[z,y] t)) in
+  fun tm -> work [] tm;;
 
 let safe_tyins i theta =
   i::(map (fun (a,b) -> type_subst [i] a,b) theta);;
@@ -56,6 +152,7 @@ let (type_unify : (hol_type * hol_type) list -> (hol_type * hol_type) list) =
         if Pervasives.compare ty1 ty2 = 0 then sofar
         else safe_tyins (ty2,ty1) sofar
       else
+        let ty2 = type_subst sofar ty2 in
         if tfree_in ty1 ty2 then failwith "type_unify"
         else safe_tyins (ty2,ty1) sofar
     else
@@ -69,6 +166,7 @@ let (type_unify : (hol_type * hol_type) list -> (hol_type * hol_type) list) =
 
 let hol_unify (avoid : string list) =
   let vcounter = ref 0 in
+  let run_time = ref 0 in
   let new_name is_origin =
     vcounter := !vcounter + 1;
     let prefix = if is_origin then "x" else "_" in
@@ -154,19 +252,19 @@ let hol_unify (avoid : string list) =
                       else check_rr t in
 
   (* each pair of obj must have matched type *)
-  let rec work (tot : int) (dep : int) (obj : (term * term) list) (tyins,tmins) sofar =
+  let rec work (dep : int) (obj : (term * term) list) (tyins,tmins) sofar =
     (* check maximum depth *)
     (*
     List.iter (fun (u,v) -> Printf.printf "0\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
     *)
-    if tot >= 100 || dep >= 5 then sofar else
+    if !run_time >= 50 || dep >= 5 then sofar else (
+    run_time := !run_time + 1;
     (* step 0: beta-eta normalization and kill extra bvars *)
     let obj = pmap beta_eta_term obj in
     let obj = map bound_eta_norm obj in
     (* step D: remove all identical pairs *)
     (*
     List.iter (fun (u,v) -> Printf.printf "1\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
-    Printf.printf "\n%!";
     *)
     let obj = filter (fun (u,v) -> alphaorder u v <> 0) obj in
     (* step O: swap all bound-free pairs *)
@@ -175,7 +273,7 @@ let hol_unify (avoid : string list) =
     (* step V: try to find FV-term pair *)
     try let (fv,tm),obj = pop (fun (u,v) -> is_var u && not (vfree_in u v)) obj in
         let tmins = safe_tmins (tm,fv) tmins in
-        work (tot+1) dep (pmap (vsubst [tm,fv]) obj) (tyins,tmins) sofar
+        work dep (pmap (vsubst [tm,fv]) obj) (tyins,tmins) sofar
     with Failure "pop" ->
       (* step T_S: match all types of const head
        * might cause incompleteness here *)
@@ -183,7 +281,7 @@ let hol_unify (avoid : string list) =
           if length tmp_ins > 0 then
             let tyins = itlist safe_tyins tmp_ins tyins in
             let tmins = pmap (inst tmp_ins) tmins in
-            work (tot+1) dep (pmap (inst tmp_ins) obj) (tyins,tmins) sofar else
+            work dep (pmap (inst tmp_ins) obj) (tyins,tmins) sofar else
           (* step S: match one rigid-rigid pair *)
           try let (tm1,tm2),obj = pop (fun (u,v) -> not (head_free u)) obj in
               let bv1,(hs1,args1) = decompose tm1 and bv2,(hs2,args2) = decompose tm2 in
@@ -197,7 +295,7 @@ let hol_unify (avoid : string list) =
                   let extra = Array.to_list (Array.sub (Array.of_list bv1) l2 (l1-l2)) in
                   bv1,bv2 @ extra,args1,args2 @ extra in
               let obj = itlist2 (fun u1 u2 t -> (mk_term bv1 u1,mk_term bv2 u2)::t) args1 args2 obj in
-              work (tot+1) dep obj (tyins,tmins) sofar
+              work dep obj (tyins,tmins) sofar
           with Failure "pop" ->
             if length obj = 0 then (tyins,tmins)::sofar else
             let tm1,tm2 = try find (fun (u,v) -> not (head_free v)) obj 
@@ -228,7 +326,7 @@ let hol_unify (avoid : string list) =
                 let args = map (fun ty -> mk_lcomb (mk_var(new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
                 let tm = mk_term bvars (mk_lcomb hs2 args) in
                 let tmins' = safe_tmins (tm,hs1) tmins in
-                work (tot+1) dep (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
+                work dep (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
               else sofar in
             (* step T_P and P: projection *)
             let tyl1,apx1 = dest_fun (type_of hs1) in
@@ -243,10 +341,10 @@ let hol_unify (avoid : string list) =
                   let t,x = inst tty tm,inst tty hs1 in
                   let tyins' = itlist safe_tyins tty tyins in
                   let tmins' = safe_tmins (t,x) (pmap (inst tty) tmins) in
-                  work (tot+1) (dep+1) (pmap ((vsubst [t,x]) o (inst tty)) obj) (tyins',tmins') sofar
+                  work (dep+1) (pmap ((vsubst [t,x]) o (inst tty)) obj) (tyins',tmins') sofar
               with Failure "type_unify" -> sofar in
             itlist noname (0--((length bvars)-1)) sofar
-      with Failure s when s = "check_rr" || s = "type_unify" -> sofar in
+      with Failure s when s = "check_rr" || s = "type_unify" -> sofar ) in
 
   (* DONE CHECKING *)
   let unify obj =
@@ -254,13 +352,13 @@ let hol_unify (avoid : string list) =
     let tyins = try type_unify (pmap type_of obj)
                 with Failure "type_unify" -> failwith "hol_unify: Type unification failed" in
     let obj = pmap (inst tyins) obj in
-    map (fun (a,b) -> tre,a,b) (work 0 0 obj (tyins,[]) []) in
+    map (fun (a,b) -> tre,a,b) (work 0 obj (tyins,[]) []) in
 
   fun (obj : (term * term) list) ->
     let unfs = unify obj in
     if forall (fun unf ->
                  forall (fun (tm1,tm2) ->
                    alphaorder (beta_eta_term (unify_term unf tm1))
-                              (beta_eta_term (unify_term unf tm2)) = 0) obj) unfs then
+                            (beta_eta_term (unify_term unf tm2)) = 0) obj) unfs then
       unfs
     else failwith "hol_unify: produce wrong unifiers";;
