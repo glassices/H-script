@@ -11,6 +11,7 @@ if not (can get_const_type "tmp") then
 let T_TAUT = DEDUCT_ANTISYM_RULE (ASSUME `t:bool`) TRUTH;;
 
 let abs_name = "xdq";;
+let tot = ref 0;;
 
 let varyname_thm th =
   let rec variant avoid s =
@@ -45,7 +46,7 @@ module type Rthm_kernel =
     val rmk_comb : rthm -> rthm -> rthm list
     val rdeduct : rthm -> rthm -> rthm list
 
-    val gen_compare : rthm -> rthm -> int
+    val is_gen : rthm -> rthm -> bool
 end;;
 
 let h = ref ([] : unifier list);;
@@ -100,18 +101,38 @@ module Rthm : Rthm_kernel = struct
       (* can not self-deduced
        * For a sequent A |- a, there does not exist a unifier s, such that
        * s(a) = a, s(A) is a proper subset of A
-       * TODO
        *)
-
+      let n = length asl in
+      if n = 0 then null_unf else
+      let tml,dc,dt = constantize (c::asl) in
+      let c' = hd tml and asl' = Array.of_list (tl tml) and asl = Array.of_list asl in
+      let best = ref n and unf = ref null_unf in
+      let rec dfs t uset pairs =
+        if length uset >= !best then () else
+          if t = n then (
+            let unfs = hol_unify [] pairs in
+            if unfs <> [] then (
+              best := length uset;
+              unf := hd unfs
+            ) else ()
+          ) else (
+            for i = 0 to n-1 do
+              dfs (t+1) (if mem i uset then uset else (i::uset))
+                  ((Array.get asl t,Array.get asl' i)::pairs)
+            done
+          ) in
+      ( dfs 0 [] [c,c'];
+        let pre,tyins,tmins = !unf in
+        pmap (varize_tm dc dt) pre,pmap (varize_ty dt) tyins,pmap (varize_tm dc dt) tmins) in
 
     (* beta-eta normalization, deduplicate, simple work on rsl *)
     let asl = uniq (qsort (map beta_eta_term asl)) in
     let c = beta_eta_term c in
-
     let unf = self_reduce asl c in
-    (* TODO unify *)
-
-
+    let asl,c,rsl = if unf = null_unf then asl,c,rsl
+                    else uniq (qsort (map (beta_eta_term o (unify_term unf)) asl)),
+                         beta_eta_term (unify_term unf c),
+                         map (unify_term unf) rsl in
     let rsl = map beta_eta_term rsl in
     let rsl = uniq (qsort (itlist ((@) o (work [])) rsl [])) in
 
@@ -439,13 +460,28 @@ module Rthm : Rthm_kernel = struct
                      (map (fun al -> dfs pairs [al,c1]) al2)) in
     safe_map (fun unf -> infer rth1 rth2 unf) "infer" unfs
 
-  (* return -1 if rth1 is more general *)
-  let gen_compare (Rhythm(asl1,c1,rsl1,_)) (Rhythm(asl2,c2,rsl2,_)) = 0
+  let is_gen (Rhythm(asl1,c1,rsl1,_)) (Rhythm(asl2,c2,_,_)) =
     (* Currently only support theorems without restrictions *)
+    if rsl1 <> [] then false else
+    let n = length asl1 and m = length asl2 in
+    if n > 0 && m = 0 then false else
+    let tml,_,_ = constantize (c2::asl2) in
+    let c2 = hd tml and asl2 = Array.of_list (tl tml) and asl1 = Array.of_list asl1 in
+    let rec dfs t i pairs =
+      tot := !tot + 1;
+      if t = n then hol_unify [] pairs <> []
+      else if i = m then false
+      else if dfs (t+1) 0 ((Array.get asl1 t,Array.get asl2 i)::pairs) then true
+           else dfs t (i+1) pairs in
+    hol_unify [] [c1,c2] <> [] && dfs 0 0 [c1,c2]
 
 end;;
 
 include Rthm;;
+
+let a = mk_rthm (mk_fthm([`a:bool`;`b:bool`],`a:bool`));;
+let b = mk_rthm (mk_fthm([`a:bool`;`a==>b`;`c:bool`;`c==>b`;`d:bool`],`b:bool`));;
+let c = mk_rthm (mk_fthm([`(\(y:bool).y) = Q`;`(P:bool->bool) = Q`],`(P:bool->bool) (x:bool)`));;
 
 (*
 let a = mk_rthm (mk_fthm ([],`z f = SUC (f 0)`));;
