@@ -1,4 +1,4 @@
-needs "script/unification.ml";;
+needs "april/unification.ml";;
 
 (* optimize eta-conv after ABS *)
 
@@ -245,7 +245,6 @@ module Rthm : Rthm_kernel = struct
       with Failure "tinker" -> failwith "infer" in
 
     let rinfer (Rhythm(asl1,c1,rsl1,invoke1)) (Rhythm(asl2,c2,rsl2,invoke2)) (pre,tyins,tmins) cty =
-      let unf = (pre,tyins,tmins) in
       try let x = mk_var(abs_name,cty) in
           let unfm = (pre,tyins,map (fun (b,a) -> (c_mogic b,a)) tmins) in
           let unfx = (pre,tyins,map (fun (b,a) -> (c_movar b,a)) tmins) in
@@ -479,9 +478,11 @@ end;;
 
 include Rthm;;
 
+(*
 let a = mk_rthm (mk_fthm([`a:bool`;`b:bool`],`a:bool`));;
 let b = mk_rthm (mk_fthm([`a:bool`;`a==>b`;`c:bool`;`c==>b`;`d:bool`],`b:bool`));;
 let c = mk_rthm (mk_fthm([`(\(y:bool).y) = Q`;`(P:bool->bool) = Q`],`(P:bool->bool) (x:bool)`));;
+*)
 
 (*
 let a = mk_rthm (mk_fthm ([],`z f = SUC (f 0)`));;

@@ -1,4 +1,4 @@
-needs "script/rthm.ml";;
+needs "april/rthm.ml";;
 
 let pp_print_rthm fmt rth =
   let asl,tm,rsl = dest_rthm rth in

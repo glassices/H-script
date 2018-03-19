@@ -18,9 +18,7 @@
  * Greedy instantiation. Won't introduce any typevar
  *)
 
-needs "script/kit.ml";;
-
-let hackl = ref ([] : (term * term) list);;
+needs "april/kit.ml";;
 
 type unifier =
   (term * term) list * (hol_type * hol_type) list * (term * term) list;;

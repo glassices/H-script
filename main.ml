@@ -1,4 +1,4 @@
-needs "script/rthm.ml";;
+needs "april/rthm.ml";;
 
 let kept = ref ([] : rthm list);;
 (* T_TAUT "t | t <=> T" is the only theorem that is deduced without canceling any hyp *)

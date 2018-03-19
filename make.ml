@@ -1,5 +1,5 @@
-loadt "script/kit.ml";
-loadt "script/unification.ml";;
-loadt "script/rthm.ml";;
-loadt "script/rprinter.ml";;
-loadt "script/main.ml";;
+loadt "april/kit.ml";
+loadt "april/unification.ml";;
+loadt "april/rthm.ml";;
+loadt "april/rprinter.ml";;
+loadt "april/main.ml";;
