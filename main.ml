@@ -11,12 +11,13 @@ let h2 = ref (mk_rthm(REFL `t`));;
 
 let main n =
   let rec work pos rth (rem : rthm list) =
-    tot := !tot + 1;
     match rem with
       h::t -> if is_gen h rth then rem
               else if is_gen rth h then (
-                if pos < !x then x := !x-1 else ();
-                if pos < !y then y := !y-1 else ();
+                if pos = !y then x := 0 else (
+                  if pos < !x then x := !x-1 else ();
+                  if pos < !y then y := !y-1 else ();
+                );
                 work pos rth t)
               else h::(work (pos+1) rth t)
     | [] -> [rth] in
@@ -29,7 +30,7 @@ let main n =
     | [] -> [] in
 
   for i = 1 to n do
-    Printf.printf "%d %d %d %d\n%!" i (length !kept) (length !unprocessed) !tot;
+    Printf.printf "%d %d %d %d %d %d\n%!" i (length !kept) (length !unprocessed) !x !y !tot;
     while length (!unprocessed) > 0 do
       let rth = hd (!unprocessed) in
       unprocessed := tl (!unprocessed);
