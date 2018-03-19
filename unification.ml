@@ -80,7 +80,7 @@ let rec varize_ty (dt : (hol_type * string) list) = let rec work ty =
       Tyapp(tycon,args) -> if args <> [] then
                              let args' = qmap work args in
                              if args' == args then ty else mk_type(tycon,args')
-                           else if (String.sub tycon 0 3) = "_t_" then
+                           else if has_prefix tycon "_t_" then
                              rev_assoc tycon dt
                            else ty
     | Tyvar(_) -> ty in
@@ -93,7 +93,7 @@ let rec varize_tm (dc : (string * string) list) (dt : (hol_type * string) list) 
   let rec exfrees tm =
     match tm with
       Var(_,_) -> [tm]
-    | Const(c,_) -> if (String.sub c 0 3) = "_c_" then [tm] else []
+    | Const(c,_) -> if has_prefix c "_c_" then [tm] else []
     | Abs(bv,bod) -> subtract (exfrees bod) [bv]
     | Comb(s,t) -> union (exfrees s) (exfrees t) in
 
@@ -107,7 +107,7 @@ let rec varize_tm (dc : (string * string) list) (dt : (hol_type * string) list) 
                      then tm'
                      else raise (Conflict tm')
     | Const(c,ty) -> let ty' = varize_ty dt ty in
-                     if (String.sub c 0 3) <> "_c_" then
+                     if not (has_prefix c "_c_") then
                        if ty' == ty then tm else
                        let tyins = type_match (type_of (mk_const(c,[]))) ty' [] in
                        mk_const(c,tyins)
@@ -126,6 +126,7 @@ let rec varize_tm (dc : (string * string) list) (dt : (hol_type * string) list) 
                      let z = mk_var(fst(dest_var y''),snd(dest_var y)) in
                      work env (mk_abs(z,vsubst[z,y] t)) in
   fun tm -> work [] tm;;
+
 
 let safe_tyins i theta =
   i::(map (fun (a,b) -> type_subst [i] a,b) theta);;

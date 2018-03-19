@@ -20,6 +20,10 @@ let rec pop p l =
   | h::t -> if p(h) then h,t
             else let x,s = pop p t in x,(h::s);;
 
+let has_prefix s1 s2 =
+  let l1 = String.length s1 and l2 = String.length s2 in
+  l1 >= l2 && (String.sub s1 0 l2) = s2;;
+
 (*
  * Input: `:A->B->C->D`
  * Output: ([`:A`; `:B`; `:C`], `:D`)
