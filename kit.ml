@@ -7,6 +7,12 @@ let safe_map f mes =
     | [] -> [] in
   mapf;;
 
+let rec rm x l =
+  match l with
+    h::t -> if x = 0 then t
+            else h::(rm (x-1) t)
+  | [] -> [];;
+
 let pmap f =
   let rec pmapf l =
     match l with

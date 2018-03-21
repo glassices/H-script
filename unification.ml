@@ -256,14 +256,14 @@ let hol_unify (avoid : string list) =
     (*
     List.iter (fun (u,v) -> Printf.printf "0\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
     *)
-    if !run_time >= 50 || dep >= 5 then sofar else (
-    run_time := !run_time + 1;
+    if dep >= 10 then sofar else (
     (* step 0: beta-eta normalization and kill extra bvars *)
     let obj = pmap beta_eta_term obj in
     let obj = map bound_eta_norm obj in
     (* step D: remove all identical pairs *)
     (*
     List.iter (fun (u,v) -> Printf.printf "1\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
+    print_endline "";
     *)
     let obj = filter (fun (u,v) -> alphaorder u v <> 0) obj in
     (* step O: swap all bound-free pairs *)
@@ -317,6 +317,8 @@ let hol_unify (avoid : string list) =
              * Imitation will not consider to increase the depth of searching
              * Or the unification algorihtm cant even solve problem like
              * [`f 1234`, `1234 + 1234`]
+             * TODO however some constant imitation will loop forever
+             * optimize it
              *)
             let sofar =
               if is_const hs2 then
@@ -325,7 +327,7 @@ let hol_unify (avoid : string list) =
                 let args = map (fun ty -> mk_lcomb (mk_var(new_name false,mk_fun (tyl1,ty))) bvars) tyl2 in
                 let tm = mk_term bvars (mk_lcomb hs2 args) in
                 let tmins' = safe_tmins (tm,hs1) tmins in
-                work dep (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
+                work (dep+1) (pmap (vsubst [tm,hs1]) obj) (tyins,tmins') sofar
               else sofar in
             (* step T_P and P: projection *)
             let tyl1,apx1 = dest_fun (type_of hs1) in
@@ -361,3 +363,26 @@ let hol_unify (avoid : string list) =
                             (beta_eta_term (unify_term unf tm2)) = 0) obj) unfs then
       unfs
     else failwith "hol_unify: produce wrong unifiers";;
+
+
+let naive_match (tm1,tm2) sofar =
+  let rec term_match tm1 tm2 env1 env2 ((tmins,tyins) as sofar) =
+    match tm1,tm2 with
+      Comb(f1,x1),Comb(f2,x2) -> let sofar = term_match f1 f2 env1 env2 sofar in
+                                 term_match x1 x2 env1 env2 sofar
+    | Abs(y1,t1),Abs(y2,t2) -> let tyins = type_match (type_of y1) (type_of y2) tyins in
+                               term_match t1 t2 (y1::env1) (y2::env2) (tmins,tyins)
+    | Const(n1,ty1),Const(n2,ty2) -> if n1 <> n2 then failwith "term_match"
+                                     else tmins,type_match ty1 ty2 tyins
+    | Var(_,ty1),_ -> if mem tm1 env1 then (
+                         try if is_var tm2 && (index tm1 env1) = (index tm2 env2) then sofar
+                             else failwith "term_match"
+                         with Failure "index" -> failwith "term_match"
+                       ) else if exists (fun x -> vfree_in x tm2) env2 then failwith "term_match"
+                       else ( try if Pervasives.compare (rev_assoc tm1 tmins) tm2 = 0 then sofar
+                                  else failwith "term_match"
+                              with Failure "find" -> (tm2,tm1)::tmins,type_match ty1 (type_of tm2) tyins )
+    | _ -> failwith "term_match" in
+  try term_match tm1 tm2 [] [] sofar
+  with Failure _ -> failwith "naive_match";;
+
