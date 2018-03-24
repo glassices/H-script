@@ -26,6 +26,12 @@ let rec pop p l =
   | h::t -> if p(h) then h,t
             else let x,s = pop p t in x,(h::s);;
 
+let rec tm_size tm =
+  match tm with
+    Comb(f,x) -> (tm_size f) + (tm_size x)
+  | Abs(_,bod) -> tm_size bod
+  | _ -> 1;;
+
 let has_prefix s1 s2 =
   let l1 = String.length s1 and l2 = String.length s2 in
   l1 >= l2 && (String.sub s1 0 l2) = s2;;

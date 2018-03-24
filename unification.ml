@@ -252,17 +252,19 @@ let hol_unify (avoid : string list) =
 
   (* each pair of obj must have matched type *)
   let rec work (dep : int) (obj : (term * term) list) (tyins,tmins) sofar =
+    if exists (fun (a,b) -> (tm_size a) >= 50) tmins then sofar else
+    if exists (fun (a,b) -> (tm_size a) >= 50 || (tm_size b) >= 50) obj then sofar else (
     (* check maximum depth *)
     (*
-    List.iter (fun (u,v) -> Printf.printf "0\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
+    List.iter (fun (u,v) -> Printf.printf "0\t%d\t%d\n%!" (tm_size u) (tm_size v)) obj;
     *)
-    if dep >= 10 then sofar else (
+    if dep >= 10 then sofar else
     (* step 0: beta-eta normalization and kill extra bvars *)
     let obj = pmap beta_eta_term obj in
     let obj = map bound_eta_norm obj in
     (* step D: remove all identical pairs *)
     (*
-    List.iter (fun (u,v) -> Printf.printf "1\t%s\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
+    List.iter (fun (u,v) -> Printf.printf "1\t%s\t\t\t%s\n%!" (string_of_term u) (string_of_term v)) obj;
     print_endline "";
     *)
     let obj = filter (fun (u,v) -> alphaorder u v <> 0) obj in
@@ -379,7 +381,7 @@ let naive_match (tm1,tm2) sofar =
                              else failwith "term_match"
                          with Failure "index" -> failwith "term_match"
                        ) else if exists (fun x -> vfree_in x tm2) env2 then failwith "term_match"
-                       else ( try if Pervasives.compare (rev_assoc tm1 tmins) tm2 = 0 then sofar
+                       else ( try if alphaorder (rev_assoc tm1 tmins) tm2 = 0 then sofar
                                   else failwith "term_match"
                               with Failure "find" -> (tm2,tm1)::tmins,type_match ty1 (type_of tm2) tyins )
     | _ -> failwith "term_match" in

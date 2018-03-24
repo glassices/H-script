@@ -354,7 +354,6 @@ module Rthm : Rthm_kernel = struct
 
     let work rth1 rth2 : rthm list =
       let rth1 = normalize_name rth1 "x" "A" and rth2 = normalize_name rth2 "y" "B" in
-      hh1 := rth1; hh2 := rth2;
       let asl1,c1,_ = dest_rthm rth1 and asl2,c2,_ = dest_rthm rth2 in
       let fnames = union (vnames_of_rthm rth1) (vnames_of_rthm rth2) in
       let s,t = dest_eq c1 in
@@ -366,8 +365,9 @@ module Rthm : Rthm_kernel = struct
           (i,j)::t -> let res = dfs t task in
                       if res = [] then []
                       else (dfs t ((Array.get asl1 i,Array.get asl2 j)::task)) @ res
-        | [] -> hol_unify fnames task in
+        | [] -> (hunfs := hol_unify fnames task; !hunfs) in
       try let _ = type_unify [type_of s,`:bool`] in
+          hh1 := rth1; hh2 := rth2;
           let unfs = dfs pairs [s,c2] in
           safe_map (fun unf -> infer rth1 rth2 unf) "infer" unfs
       with Failure "type_unify" -> [] in
@@ -501,6 +501,8 @@ module Rthm : Rthm_kernel = struct
     with Failure "naive_match" -> false
 
   let simplify rth1 rth2 =
+    rth2
+    (*
     let rec work rth1 rth2 pos =
       if pos < 0 then rth2 else
       let asl1,c1,_ = dest_rthm rth1 and asl2,c2,_ = dest_rthm rth2 in
@@ -527,10 +529,19 @@ module Rthm : Rthm_kernel = struct
                                     EQ_MP (DEDUCT_ANTISYM_RULE r1 (invoke2 unfl)) r1) in
       work rth1 rth2 (pos-1) in
     work rth1 rth2 ((length (rhyp rth2))-1)
+    *)
 
 end;;
 
 include Rthm;;
+
+let t_def = mk_rthm(T_DEF);;
+let and_def = mk_rthm(AND_DEF);;
+let refl = mk_rthm(REFL `a:A`);;
+let assume = mk_rthm(ASSUME `a:bool`);;
+
+let r1 = hd (rmk_comb refl assume);;
+let r2 = hd (rmk_comb assume and_def);;
 
 (*
 let a = mk_rthm (mk_fthm([`a:bool`;`b:bool`;`a /\ b`],`a \/ b`));;
@@ -575,9 +586,10 @@ let and_def = mk_rthm(AND_DEF);;
 let t_taut = mk_rthm(T_TAUT);;
 let refl = mk_rthm(REFL `a:A`);;
 let assume = mk_rthm(ASSUME `a:bool`);;
+(*
 let r4 = el 0 (rmk_comb refl t_def);;
 let r5 = el 0 (rmk_comb r4 refl);;
-let r6 = el 2 (req_mp r5 refl);;
+let r6 = el 1 (req_mp r4 refl);;
 let r7 = el 0 (req_mp r6 refl);;
 let r13 = el 0 (rmk_comb refl assume);;
 let r14 = el 0 (rmk_comb r13 refl);;
@@ -593,3 +605,7 @@ let r87 = el 0 (rmk_comb refl r76);;
 let r88 = el 0 (rmk_comb r87 refl);;
 let r89 = el 2 (req_mp r88 refl);;
 let r90 = el 1 (req_mp r89 r71);;
+*)
+
+let rr1 = hd (rmk_comb refl assume);;
+let rr2 = refl;;
